@@ -23,7 +23,7 @@ from pages.admin_dashboard import render_admin_dashboard
 
 
 def init_app():
-    """Initialize app with database tables and default admin."""
+    """Initialize app with database tables and default users."""
     init_db()
     
     # Create default admin if not exists
@@ -31,6 +31,9 @@ def init_app():
     try:
         if not session.query(User).filter_by(username="Admin").first():
             create_user("Admin", "Admin@123", "admin")
+        # Create default teacher if not exists
+        if not session.query(User).filter_by(username="Teacher").first():
+            create_user("Teacher", "Teacher@123", "teacher")
     finally:
         session.close()
 
@@ -192,17 +195,23 @@ def render_sidebar():
         
         st.markdown("### Navigation")
         
-        # Navigation options
+        # Navigation options - available to all logged in users
         pages = {
             "📸 Face Attendance": "face_attendance",
             "📊 Dropout Risk Analyzer": "dropout_analyzer",
         }
         
+        # Teacher role - can access student registration but not admin features
+        if st.session_state.get("role") in ["admin", "teacher"]:
+            pages["📝 Student Registration"] = "student_registration"
+        
         # Admin-only pages
         if st.session_state.get("role") == "admin":
-            pages["📝 Student Registration"] = "student_registration"
             pages["📥 Batch Import"] = "batch_import"
             pages["🎛️ Admin Dashboard"] = "admin_dashboard"
+        
+        # Settings page - available to all
+        pages["⚙️ Settings"] = "settings"
         
         # Page selection
         selected = st.radio(
@@ -245,6 +254,9 @@ def render_main_content():
         render_batch_import()
     elif page == "admin_dashboard":
         render_admin_dashboard()
+    elif page == "settings":
+        from pages.settings import render_settings
+        render_settings()
 
 
 def main():
