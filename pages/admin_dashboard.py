@@ -206,10 +206,11 @@ def render_attendance_summary():
     with col1:
         start_date = st.date_input(
             "Start Date",
-            value=datetime.now().date() - timedelta(days=30)
+            value=datetime.now().date() - timedelta(days=30),
+            key="attendance_start_date"
         )
     with col2:
-        end_date = st.date_input("End Date", value=datetime.now().date())
+        end_date = st.date_input("End Date", value=datetime.now().date(), key="attendance_end_date")
     
     session = get_db_session()
     try:
@@ -709,9 +710,9 @@ def render_data_export():
         
         col_a, col_b = st.columns(2)
         with col_a:
-            start_date = st.date_input("Start Date", datetime.now() - timedelta(days=30))
+            start_date = st.date_input("Start Date", datetime.now() - timedelta(days=30), key="report_start_date")
         with col_b:
-            end_date = st.date_input("End Date", datetime.now())
+            end_date = st.date_input("End Date", datetime.now(), key="report_end_date")
         
         if st.button("📊 Generate Attendance Report", type="primary"):
             start_dt = datetime.combine(start_date, datetime.min.time())
