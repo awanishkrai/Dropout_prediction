@@ -104,25 +104,27 @@ def analyze_student(student: Student, analysis_window: int):
     # Calculate attendance
     attendance_pct = calculate_attendance_percentage(student.student_id, analysis_window)
     
-    # Get student features
+    # Get student features (matching training data: synthetic_students_tuned.csv)
     avg_grade = float(student.avg_grade or 7.0)
     infractions = int(student.infractions or 0)
     gender = student.gender or "M"
     support = student.support or "medium"
     mode = student.mode or "full_time"
     
-    # Display current features
-    st.markdown("### 📋 Student Profile")
+    # Display all features used by the ML model
+    st.markdown("### 📋 Prediction Features")
+    st.caption("These are the exact values used by the ML model (trained on synthetic_students_tuned.csv)")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Attendance", f"{attendance_pct:.1f}%")
+        st.metric("Attendance", f"{attendance_pct:.1f}%", help="Range: 0-100%")
+        st.metric("Gender", gender, help="M or F")
     with col2:
-        st.metric("Avg Grade", f"{avg_grade:.1f}/10")
+        st.metric("Avg Grade", f"{avg_grade:.1f}/10", help="Range: 0-10")
+        st.metric("Support Level", support.title(), help="low, medium, or high")
     with col3:
-        st.metric("Infractions", infractions)
-    with col4:
-        st.metric("Support Level", support.title())
+        st.metric("Infractions", infractions, help="Range: 0-10")
+        st.metric("Mode", mode.replace("_", " ").title(), help="full_time or part_time")
     
     st.markdown("---")
     
