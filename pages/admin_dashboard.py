@@ -28,9 +28,10 @@ def render_admin_dashboard():
     
     st.markdown("---")
     
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "👥 Students Overview",
         "📅 Attendance Summary",
+        "📈 Analytics",
         "🎯 Risk Analysis",
         "📥 Data Export"
     ])
@@ -42,9 +43,12 @@ def render_admin_dashboard():
         render_attendance_summary()
     
     with tab3:
-        render_risk_analysis()
+        render_analytics()
     
     with tab4:
+        render_risk_analysis()
+    
+    with tab5:
         render_data_export()
 
 
@@ -271,6 +275,197 @@ def render_attendance_summary():
             )
         else:
             st.info("No attendance records found for the selected date range.")
+    finally:
+        session.close()
+
+
+def render_analytics():
+    """Render analytics with trend charts, heatmap, and distribution."""
+    st.subheader("📈 Analytics Dashboard")
+    
+    session = get_db_session()
+    try:
+        # Get all data
+        students = session.query(Student).all()
+        logs = session.query(AttendanceLog).all()
+        
+        if not students:
+            st.warning("No students registered yet.")
+            return
+        
+        # Convert to DataFrames
+        student_df = pd.DataFrame([{
+            "student_id": s.student_id,
+            "name": s.name,
+            "program": s.program or "Unknown",
+            "support": s.support or "medium"
+        } for s in students])
+        
+        if logs:
+            log_df = pd.DataFrame([{
+                "student_id": l.student_id,
+                "date": l.timestamp.date(),
+                "week": l.timestamp.isocalendar()[1],
+                "day_name": l.timestamp.strftime("%A")
+            } for l in logs])
+        else:
+            log_df = pd.DataFrame()
+        
+        # Row 1: Trend Charts
+        st.markdown("### 📊 Attendance Trends")
+        
+        if not log_df.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Daily trend
+                daily = log_df.groupby('date')['student_id'].nunique().reset_index()
+                daily.columns = ['Date', 'Students Present']
+                fig_trend = px.area(
+                    daily, x='Date', y='Students Present',
+                    title="Daily Attendance Trend",
+                    color_discrete_sequence=['#667eea']
+                )
+                fig_trend.update_layout(height=300)
+                st.plotly_chart(fig_trend, use_container_width=True)
+            
+            with col2:
+                # Weekly trend
+                weekly = log_df.groupby('week')['student_id'].nunique().reset_index()
+                weekly.columns = ['Week', 'Unique Students']
+                fig_weekly = px.bar(
+                    weekly, x='Week', y='Unique Students',
+                    title="Weekly Attendance",
+                    color_discrete_sequence=['#764ba2']
+                )
+                fig_weekly.update_layout(height=300)
+                st.plotly_chart(fig_weekly, use_container_width=True)
+        else:
+            st.info("No attendance data available for trends.")
+        
+        st.markdown("---")
+        
+        # Row 2: Heatmap
+        st.markdown("### 🗓️ Attendance Heatmap")
+        
+        if not log_df.empty:
+            # Create heatmap data: day of week vs week number
+            heatmap_data = log_df.groupby(['week', 'day_name'])['student_id'].nunique().reset_index()
+            heatmap_data.columns = ['Week', 'Day', 'Count']
+            
+            # Pivot for heatmap
+            day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            heatmap_pivot = heatmap_data.pivot(index='Day', columns='Week', values='Count').fillna(0)
+            
+            # Reorder days
+            heatmap_pivot = heatmap_pivot.reindex([d for d in day_order if d in heatmap_pivot.index])
+            
+            fig_heatmap = px.imshow(
+                heatmap_pivot,
+                labels=dict(x="Week Number", y="Day", color="Students"),
+                title="Attendance Heatmap (Students per Day)",
+                color_continuous_scale="Viridis",
+                aspect="auto"
+            )
+            fig_heatmap.update_layout(height=350)
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+        else:
+            st.info("No attendance data available for heatmap.")
+        
+        st.markdown("---")
+        
+        # Row 3: Risk Distribution
+        st.markdown("### 🎯 Risk Distribution")
+        
+        # Calculate risk for all students
+        risk_counts = {"Low Risk": 0, "Medium Risk": 0, "High Risk": 0}
+        
+        for student in students:
+            # Simple risk calculation based on available data
+            attendance_pct = 75.0  # Default
+            if not log_df.empty:
+                student_logs = log_df[log_df['student_id'] == student.student_id]
+                days_present = student_logs['date'].nunique()
+                # Assume 30 day window
+                attendance_pct = min(100, (days_present / 30) * 100)
+            
+            risk_label, _ = predict_risk(
+                attendance=attendance_pct,
+                avg_grade=float(student.avg_grade or 7.0),
+                infractions=int(student.infractions or 0),
+                gender=student.gender or "M",
+                support=student.support or "medium",
+                mode=student.mode or "full_time"
+            )
+            
+            if risk_label == 0:
+                risk_counts["Low Risk"] += 1
+            elif risk_label == 1:
+                risk_counts["Medium Risk"] += 1
+            else:
+                risk_counts["High Risk"] += 1
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Pie chart
+            fig_pie = px.pie(
+                names=list(risk_counts.keys()),
+                values=list(risk_counts.values()),
+                title="Risk Level Distribution",
+                color=list(risk_counts.keys()),
+                color_discrete_map={
+                    "Low Risk": "#28a745",
+                    "Medium Risk": "#ffc107",
+                    "High Risk": "#dc3545"
+                }
+            )
+            fig_pie.update_layout(height=350)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col2:
+            # Bar chart
+            fig_bar = go.Figure(go.Bar(
+                x=list(risk_counts.keys()),
+                y=list(risk_counts.values()),
+                marker_color=['#28a745', '#ffc107', '#dc3545'],
+                text=list(risk_counts.values()),
+                textposition='auto'
+            ))
+            fig_bar.update_layout(
+                title="Risk Level Counts",
+                xaxis_title="Risk Level",
+                yaxis_title="Number of Students",
+                height=350
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+        
+        # Support level distribution
+        st.markdown("### 📊 Student Demographics")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            support_counts = student_df['support'].value_counts()
+            fig_support = px.pie(
+                names=support_counts.index,
+                values=support_counts.values,
+                title="Support Level Distribution",
+                color_discrete_sequence=px.colors.qualitative.Set2
+            )
+            fig_support.update_layout(height=300)
+            st.plotly_chart(fig_support, use_container_width=True)
+        
+        with col2:
+            program_counts = student_df['program'].value_counts().head(6)
+            fig_program = px.bar(
+                x=program_counts.index,
+                y=program_counts.values,
+                title="Students by Program (Top 6)",
+                color_discrete_sequence=['#667eea']
+            )
+            fig_program.update_layout(height=300, xaxis_title="Program", yaxis_title="Count")
+            st.plotly_chart(fig_program, use_container_width=True)
+            
     finally:
         session.close()
 

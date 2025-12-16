@@ -12,7 +12,7 @@ def render_settings():
     st.title("⚙️ Settings")
     st.markdown("Manage your account and preferences.")
     
-    tab1, tab2, tab3 = st.tabs(["🎨 Appearance", "🔐 Password", "👤 Account"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🎨 Appearance", "🔐 Password", "📧 Notifications", "👤 Account"])
     
     with tab1:
         render_appearance_settings()
@@ -21,6 +21,10 @@ def render_settings():
         render_password_settings()
     
     with tab3:
+        from utils.notifications import render_notification_settings
+        render_notification_settings()
+    
+    with tab4:
         render_account_info()
 
 
