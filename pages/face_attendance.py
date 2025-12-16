@@ -37,20 +37,33 @@ def render_camera_attendance():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        uploaded_file = st.file_uploader(
-            "Upload an image with student face",
-            type=['jpg', 'jpeg', 'png'],
-            key="face_upload"
+        # Choice for input method
+        capture_method = st.radio(
+            "Capture Method:",
+            ["📷 Webcam Stream", "📁 Upload Image"],
+            horizontal=True
         )
         
-        if uploaded_file is not None:
+        image_input = None
+        
+        if capture_method == "📷 Webcam Stream":
+            st.info("Ensure clear visibility of faces. Multiple students can be detected at once.")
+            image_input = st.camera_input("Capture Attendance", key="attend_cam")
+        else:
+            image_input = st.file_uploader(
+                "Upload an image with student face(s)",
+                type=['jpg', 'jpeg', 'png'],
+                key="attend_upload"
+            )
+        
+        if image_input is not None:
             # Read image
-            image = Image.open(uploaded_file)
+            image = Image.open(image_input)
             img_array = np.array(image)
             
             # Convert RGB to BGR for OpenCV
-            if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-                img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+            if len(img_array.shape) == 3 and img_array.shape[2] >= 3:
+                img_bgr = cv2.cvtColor(img_array[:,:,:3], cv2.COLOR_RGB2BGR)
             else:
                 img_bgr = img_array
             
@@ -58,8 +71,9 @@ def render_camera_attendance():
             faces = detect_faces(img_bgr)
             
             if len(faces) == 0:
-                st.warning("⚠️ No face detected in the image. Please try another image.")
-                st.image(image, caption="Uploaded Image", use_container_width=True)
+                st.warning("⚠️ No face detected. Please try again.")
+                if capture_method == "📁 Upload Image":
+                    st.image(image, caption="Uploaded Image", use_container_width=True)
             else:
                 st.success(f"✅ Detected {len(faces)} face(s)")
                 
@@ -84,24 +98,32 @@ def render_camera_attendance():
                     
                     annotated = draw_face_boxes(img_bgr, faces, labels)
                     annotated_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                    st.image(annotated_rgb, caption="Detected Faces", use_container_width=True)
+                    st.image(annotated_rgb, caption="Real-time Detection", use_container_width=True)
                     
                     # Show matched students
                     if matched_students:
-                        st.markdown("### Recognized Students")
-                        for i, student, _ in matched_students:
-                            col_a, col_b = st.columns([3, 1])
-                            with col_a:
-                                st.write(f"**{student['name']}** (ID: {student['student_id']})")
-                            with col_b:
-                                if st.button(f"Mark Present", key=f"mark_{student['student_id']}"):
-                                    if log_attendance(student['student_id'], "face_recognition"):
-                                        st.success(f"✅ Marked {student['name']} as present!")
-                                        st.rerun()
-                                    else:
-                                        st.warning(f"⚠️ {student['name']} is already present today.")
+                        st.markdown("### 📝 recognized Students")
+                        
+                        # Auto-mark option
+                        auto_mark = st.checkbox("Auto-mark all authenticated faces as present", value=True)
+                        
+                        if auto_mark:
+                            count = 0
+                            for _, student, _ in matched_students:
+                                if log_attendance(student['student_id'], "face_scan"):
+                                    count += 1
+                            if count > 0:
+                                st.success(f"✅ Automatically marked {count} student(s) as present!")
+                                # Rerun to update log immediately? Maybe too jarring.
+                        
+                        st.dataframe([{
+                            "Name": s['name'],
+                            "ID": s['student_id'],
+                            "Status": "✅ Marked Present" if auto_mark else "Waiting"
+                        } for _, s, _ in matched_students], use_container_width=True)
+
                     else:
-                        st.info("No registered students matched. Use manual attendance or register the student first.")
+                        st.warning("No registered students found in this image.")
                         
                 except Exception as e:
                     st.error(f"Error processing face recognition: {e}")
@@ -109,14 +131,15 @@ def render_camera_attendance():
     with col2:
         st.markdown("### Instructions")
         st.markdown("""
-        1. Upload a clear photo with the student's face
-        2. The system will detect and match faces
-        3. Click 'Mark Present' for recognized students
+        1. **Select Input**: Use Webcam for real-time or Upload for files.
+        2. **Capture**: Take a photo of the class or student.
+        3. **Processing**: System detects multiple faces automatically.
+        4. **Attendance**: Recognized students are marked present instantly.
         
         **Tips:**
         - Ensure good lighting
-        - Face should be clearly visible
-        - One person per image works best
+        - Faces should be front-facing
+        - Can detect multiple students in one frame
         """)
 
 
