@@ -201,6 +201,7 @@ def render_sidebar():
         # Admin-only pages
         if st.session_state.get("role") == "admin":
             pages["📝 Student Registration"] = "student_registration"
+            pages["📥 Batch Import"] = "batch_import"
             pages["🎛️ Admin Dashboard"] = "admin_dashboard"
         
         # Page selection
@@ -239,6 +240,9 @@ def render_main_content():
         render_dropout_analyzer()
     elif page == "student_registration":
         render_student_registration()
+    elif page == "batch_import":
+        from pages.batch_import import render_batch_import
+        render_batch_import()
     elif page == "admin_dashboard":
         render_admin_dashboard()
 

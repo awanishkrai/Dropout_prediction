@@ -65,6 +65,14 @@ To verify that everything is working correctly:
 python -m pytest tests/ -v
 ```
 
+## 🎯 Features
+
+- **Login System**: Secure authentication with admin roles
+- **Student Registration**: Register students with face photos for recognition
+- **Face Attendance**: Upload images to detect and recognize multiple students simultaneously
+- **Dropout Risk Analyzer**: ML-based prediction of student dropout risk with explanations
+- **Admin Dashboard**: Analytics, data export, and system overview
+
 ## 📂 Project Structure
 
 ```

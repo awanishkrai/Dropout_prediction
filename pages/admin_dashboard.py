@@ -389,12 +389,19 @@ def render_data_export():
     """Render data export options."""
     st.subheader("📥 Data Export")
     
-    st.markdown("Export data to CSV for external analysis.")
+    st.markdown("Export data to CSV or Excel for external analysis.")
     
-    col1, col2, col3 = st.columns(3)
+    # Export format selection
+    export_format = st.radio(
+        "Select export format:",
+        ["📄 CSV", "📊 Excel"],
+        horizontal=True
+    )
     
     session = get_db_session()
     try:
+        col1, col2, col3 = st.columns(3)
+        
         with col1:
             st.markdown("### Students Data")
             students = session.query(Student).all()
@@ -410,14 +417,28 @@ def render_data_export():
                     "program": s.program
                 } for s in students]
                 df = pd.DataFrame(student_list)
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Students CSV",
-                    csv,
-                    "students_export.csv",
-                    "text/csv",
-                    key="download_students"
-                )
+                
+                if export_format == "📄 CSV":
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Students CSV",
+                        csv,
+                        "students_export.csv",
+                        "text/csv",
+                        key="download_students"
+                    )
+                else:
+                    # Excel export
+                    from io import BytesIO
+                    buffer = BytesIO()
+                    df.to_excel(buffer, index=False, engine='openpyxl')
+                    st.download_button(
+                        "📥 Download Students Excel",
+                        buffer.getvalue(),
+                        "students_export.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_students_xlsx"
+                    )
                 st.caption(f"{len(student_list)} students")
             else:
                 st.info("No students to export")
@@ -428,18 +449,33 @@ def render_data_export():
             if logs:
                 log_list = [{
                     "student_id": l.student_id,
-                    "timestamp": l.timestamp,
+                    "student_name": l.student.name if l.student else "Unknown",
+                    "timestamp": l.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    "date": l.timestamp.strftime("%Y-%m-%d"),
                     "status": l.status
                 } for l in logs]
                 df = pd.DataFrame(log_list)
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Attendance CSV",
-                    csv,
-                    "attendance_export.csv",
-                    "text/csv",
-                    key="download_attendance"
-                )
+                
+                if export_format == "📄 CSV":
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Attendance CSV",
+                        csv,
+                        "attendance_export.csv",
+                        "text/csv",
+                        key="download_attendance"
+                    )
+                else:
+                    from io import BytesIO
+                    buffer = BytesIO()
+                    df.to_excel(buffer, index=False, engine='openpyxl')
+                    st.download_button(
+                        "📥 Download Attendance Excel",
+                        buffer.getvalue(),
+                        "attendance_export.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_attendance_xlsx"
+                    )
                 st.caption(f"{len(log_list)} records")
             else:
                 st.info("No attendance to export")
@@ -448,16 +484,97 @@ def render_data_export():
             st.markdown("### Risk Analysis")
             if 'risk_results' in st.session_state:
                 df = pd.DataFrame(st.session_state['risk_results'])
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    "📥 Download Risk CSV",
-                    csv,
-                    "risk_analysis_export.csv",
-                    "text/csv",
-                    key="download_risk"
-                )
+                if export_format == "📄 CSV":
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Risk CSV",
+                        csv,
+                        "risk_analysis_export.csv",
+                        "text/csv",
+                        key="download_risk"
+                    )
+                else:
+                    from io import BytesIO
+                    buffer = BytesIO()
+                    df.to_excel(buffer, index=False, engine='openpyxl')
+                    st.download_button(
+                        "📥 Download Risk Excel",
+                        buffer.getvalue(),
+                        "risk_analysis_export.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_risk_xlsx"
+                    )
                 st.caption(f"{len(df)} assessments")
             else:
                 st.info("Run risk analysis first")
+        
+        # Attendance Report Section
+        st.markdown("---")
+        st.markdown("### 📊 Attendance Report Generator")
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            start_date = st.date_input("Start Date", datetime.now() - timedelta(days=30))
+        with col_b:
+            end_date = st.date_input("End Date", datetime.now())
+        
+        if st.button("📊 Generate Attendance Report", type="primary"):
+            start_dt = datetime.combine(start_date, datetime.min.time())
+            end_dt = datetime.combine(end_date, datetime.max.time())
+            
+            logs = session.query(AttendanceLog).filter(
+                AttendanceLog.timestamp >= start_dt,
+                AttendanceLog.timestamp <= end_dt
+            ).all()
+            
+            students_q = session.query(Student).all()
+            
+            if logs and students_q:
+                # Generate report data
+                report_data = []
+                unique_dates = sorted(set(l.timestamp.date() for l in logs))
+                
+                for student in students_q:
+                    student_logs = [l for l in logs if l.student_id == student.student_id]
+                    days_present = len(set(l.timestamp.date() for l in student_logs))
+                    total_days = len(unique_dates) if unique_dates else 1
+                    attendance_rate = (days_present / total_days) * 100 if total_days > 0 else 0
+                    
+                    report_data.append({
+                        "Student ID": student.student_id,
+                        "Name": student.name,
+                        "Program": student.program,
+                        "Days Present": days_present,
+                        "Total Days": total_days,
+                        "Attendance Rate (%)": round(attendance_rate, 1)
+                    })
+                
+                report_df = pd.DataFrame(report_data)
+                st.dataframe(report_df, use_container_width=True, hide_index=True)
+                
+                # Download report
+                if export_format == "📄 CSV":
+                    csv = report_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download Report CSV",
+                        csv,
+                        f"attendance_report_{start_date}_{end_date}.csv",
+                        "text/csv",
+                        key="download_report"
+                    )
+                else:
+                    from io import BytesIO
+                    buffer = BytesIO()
+                    report_df.to_excel(buffer, index=False, engine='openpyxl')
+                    st.download_button(
+                        "📥 Download Report Excel",
+                        buffer.getvalue(),
+                        f"attendance_report_{start_date}_{end_date}.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_report_xlsx"
+                    )
+            else:
+                st.warning("No data available for the selected date range.")
     finally:
         session.close()
+
