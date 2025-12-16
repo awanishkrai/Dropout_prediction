@@ -1,33 +1,41 @@
 """
-Pytest configuration and shared fixtures.
+Pytest configuration and shared fixtures for SQLite/SQLAlchemy.
 """
 import pytest
 import sys
 import os
-from unittest.mock import MagicMock
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from utils.models import Base
+
+
 @pytest.fixture
-def mock_mongodb(monkeypatch):
-    """Mock MongoDB client and collections."""
-    mock_client = MagicMock()
-    mock_db = MagicMock()
+def test_db():
+    """Create an in-memory SQLite database for testing."""
+    # Create in-memory database
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
     
-    # Memoize collections to ensure the same mock is returned for the same name
-    mock_collections = {}
-    def get_collection(name):
-        if name not in mock_collections:
-            mock_collections[name] = MagicMock(name=name)
-        return mock_collections[name]
-        
-    mock_client.__getitem__.return_value = mock_db
-    mock_db.__getitem__.side_effect = get_collection
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = SessionLocal()
     
-    # Patch get_mongo_client AND get_database to bypass streamlit cache
+    yield session
+    
+    session.close()
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def mock_db_session(test_db, monkeypatch):
+    """Patch get_db_session to use the test database."""
     from utils import db
-    monkeypatch.setattr(db, "get_mongo_client", lambda: mock_client)
-    monkeypatch.setattr(db, "get_database", lambda: mock_db)
     
-    return mock_db
+    def get_test_session():
+        return test_db
+    
+    monkeypatch.setattr(db, "get_db_session", get_test_session)
+    return test_db

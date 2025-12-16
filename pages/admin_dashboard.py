@@ -6,9 +6,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from io import BytesIO
+from sqlalchemy import func
 
-from utils.db import get_students_collection, get_attendance_logs_collection, get_risk_scores_collection
+from utils.db import get_db_session
+from utils.models import Student, AttendanceLog, RiskScore
 from utils.model import predict_risk, get_risk_label_info
 
 
@@ -49,67 +50,76 @@ def render_admin_dashboard():
 
 def render_quick_stats():
     """Render quick statistics cards."""
-    students = get_students_collection()
-    attendance = get_attendance_logs_collection()
+    session = get_db_session()
     
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    
-    total_students = students.count_documents({})
-    present_today = len(attendance.distinct("student_id", {
-        "timestamp": {"$gte": today}
-    }))
-    with_face = students.count_documents({"face_embedding": {"$exists": True}})
-    
-    # Calculate average attendance rate (last 30 days)
-    thirty_days_ago = datetime.now() - timedelta(days=30)
-    attendance_logs = list(attendance.find({"timestamp": {"$gte": thirty_days_ago}}))
-    
-    if total_students > 0 and attendance_logs:
-        unique_days = len(set(log['timestamp'].date() for log in attendance_logs))
-        if unique_days > 0:
-            avg_daily = len(set((log['student_id'], log['timestamp'].date()) for log in attendance_logs)) / unique_days
-            avg_rate = (avg_daily / total_students) * 100
+    try:
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        total_students = session.query(Student).count()
+        
+        # Students present today
+        present_today = session.query(func.count(func.distinct(AttendanceLog.student_id))).filter(
+            AttendanceLog.timestamp >= today
+        ).scalar() or 0
+        
+        # Students with face embedding
+        with_face = session.query(Student).filter(
+            Student.face_embedding.isnot(None)
+        ).count()
+        
+        # Calculate average attendance rate (last 30 days)
+        thirty_days_ago = datetime.now() - timedelta(days=30)
+        logs = session.query(AttendanceLog).filter(
+            AttendanceLog.timestamp >= thirty_days_ago
+        ).all()
+        
+        if total_students > 0 and logs:
+            unique_days = len(set(log.timestamp.date() for log in logs))
+            if unique_days > 0:
+                unique_student_days = len(set((log.student_id, log.timestamp.date()) for log in logs))
+                avg_daily = unique_student_days / unique_days
+                avg_rate = (avg_daily / total_students) * 100
+            else:
+                avg_rate = 0
         else:
             avg_rate = 0
-    else:
-        avg_rate = 0
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Total Students",
-            total_students,
-            help="Total registered students in the system"
-        )
-    
-    with col2:
-        st.metric(
-            "Present Today",
-            present_today,
-            delta=f"{(present_today/total_students*100):.0f}%" if total_students > 0 else "0%"
-        )
-    
-    with col3:
-        st.metric(
-            "Face Enrolled",
-            with_face,
-            delta=f"{(with_face/total_students*100):.0f}%" if total_students > 0 else "0%"
-        )
-    
-    with col4:
-        st.metric(
-            "Avg Attendance",
-            f"{avg_rate:.1f}%",
-            help="Average daily attendance rate (30 days)"
-        )
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                "Total Students",
+                total_students,
+                help="Total registered students in the system"
+            )
+        
+        with col2:
+            st.metric(
+                "Present Today",
+                present_today,
+                delta=f"{(present_today/total_students*100):.0f}%" if total_students > 0 else "0%"
+            )
+        
+        with col3:
+            st.metric(
+                "Face Enrolled",
+                with_face,
+                delta=f"{(with_face/total_students*100):.0f}%" if total_students > 0 else "0%"
+            )
+        
+        with col4:
+            st.metric(
+                "Avg Attendance",
+                f"{avg_rate:.1f}%",
+                help="Average daily attendance rate (30 days)"
+            )
+    finally:
+        session.close()
 
 
 def render_students_overview():
     """Render students overview with search and filter."""
     st.subheader("👥 Students Overview")
-    
-    students = get_students_collection()
     
     # Filters
     col1, col2, col3 = st.columns(3)
@@ -120,57 +130,67 @@ def render_students_overview():
     with col3:
         support_filter = st.selectbox("Support Level", ["All", "low", "medium", "high"])
     
-    # Build query
-    query = {}
-    if search:
-        query["$or"] = [
-            {"name": {"$regex": search, "$options": "i"}},
-            {"student_id": {"$regex": search, "$options": "i"}}
-        ]
-    if mode_filter != "All":
-        query["mode"] = mode_filter
-    if support_filter != "All":
-        query["support"] = support_filter
-    
-    # Fetch and display
-    student_list = list(students.find(query, {"_id": 0, "face_embedding": 0}))
-    
-    if student_list:
-        df = pd.DataFrame(student_list)
+    session = get_db_session()
+    try:
+        query = session.query(Student)
         
-        # Reorder columns
-        cols = ['student_id', 'name', 'gender', 'mode', 'support', 'avg_grade', 'infractions', 'program']
-        cols = [c for c in cols if c in df.columns]
-        df = df[cols]
+        if search:
+            query = query.filter(
+                (Student.name.ilike(f"%{search}%")) | 
+                (Student.student_id.ilike(f"%{search}%"))
+            )
+        if mode_filter != "All":
+            query = query.filter(Student.mode == mode_filter)
+        if support_filter != "All":
+            query = query.filter(Student.support == support_filter)
         
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        students = query.all()
         
-        # Charts
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if 'support' in df.columns:
-                support_counts = df['support'].value_counts()
-                fig = px.pie(
-                    values=support_counts.values,
-                    names=support_counts.index,
-                    title="Support Level Distribution",
-                    color_discrete_sequence=px.colors.qualitative.Set2
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            if 'mode' in df.columns:
-                mode_counts = df['mode'].value_counts()
-                fig = px.pie(
-                    values=mode_counts.values,
-                    names=mode_counts.index,
-                    title="Study Mode Distribution",
-                    color_discrete_sequence=px.colors.qualitative.Pastel
-                )
-                st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("No students found matching the filters.")
+        if students:
+            student_list = []
+            for s in students:
+                student_list.append({
+                    "student_id": s.student_id,
+                    "name": s.name,
+                    "gender": s.gender,
+                    "mode": s.mode,
+                    "support": s.support,
+                    "avg_grade": s.avg_grade,
+                    "infractions": s.infractions,
+                    "program": s.program
+                })
+            
+            df = pd.DataFrame(student_list)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            # Charts
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if 'support' in df.columns:
+                    support_counts = df['support'].value_counts()
+                    fig = px.pie(
+                        values=support_counts.values,
+                        names=support_counts.index,
+                        title="Support Level Distribution",
+                        color_discrete_sequence=px.colors.qualitative.Set2
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                if 'mode' in df.columns:
+                    mode_counts = df['mode'].value_counts()
+                    fig = px.pie(
+                        values=mode_counts.values,
+                        names=mode_counts.index,
+                        title="Study Mode Distribution",
+                        color_discrete_sequence=px.colors.qualitative.Pastel
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No students found matching the filters.")
+    finally:
+        session.close()
 
 
 def render_attendance_summary():
@@ -187,74 +207,89 @@ def render_attendance_summary():
     with col2:
         end_date = st.date_input("End Date", value=datetime.now().date())
     
-    students = get_students_collection()
-    attendance = get_attendance_logs_collection()
-    
-    start_dt = datetime.combine(start_date, datetime.min.time())
-    end_dt = datetime.combine(end_date, datetime.max.time())
-    
-    # Get attendance data
-    logs = list(attendance.find({
-        "timestamp": {"$gte": start_dt, "$lte": end_dt}
-    }))
-    
-    if logs:
-        # Daily attendance trend
-        df_logs = pd.DataFrame(logs)
-        df_logs['date'] = df_logs['timestamp'].dt.date
-        daily_counts = df_logs.groupby('date')['student_id'].nunique().reset_index()
-        daily_counts.columns = ['date', 'students_present']
+    session = get_db_session()
+    try:
+        start_dt = datetime.combine(start_date, datetime.min.time())
+        end_dt = datetime.combine(end_date, datetime.max.time())
         
-        fig = px.line(
-            daily_counts,
-            x='date',
-            y='students_present',
-            title="Daily Attendance Trend",
-            markers=True
-        )
-        fig.update_layout(xaxis_title="Date", yaxis_title="Students Present")
-        st.plotly_chart(fig, use_container_width=True)
+        # Get attendance data
+        logs = session.query(AttendanceLog).filter(
+            AttendanceLog.timestamp >= start_dt,
+            AttendanceLog.timestamp <= end_dt
+        ).all()
         
-        # Per-student attendance table
-        st.markdown("### Per-Student Attendance")
-        
-        student_map = {s['student_id']: s['name'] for s in students.find()}
-        total_students = students.count_documents({})
-        
-        # Calculate days in range (excluding weekends)
-        date_range = pd.date_range(start_date, end_date)
-        expected_days = len([d for d in date_range if d.weekday() < 5])
-        
-        # Count per student
-        student_attendance = df_logs.groupby('student_id').agg({
-            'date': 'nunique'
-        }).reset_index()
-        student_attendance.columns = ['student_id', 'days_present']
-        student_attendance['name'] = student_attendance['student_id'].map(student_map)
-        student_attendance['attendance_rate'] = (
-            student_attendance['days_present'] / max(expected_days, 1) * 100
-        ).round(1)
-        student_attendance = student_attendance.sort_values('attendance_rate', ascending=False)
-        
-        st.dataframe(
-            student_attendance[['student_id', 'name', 'days_present', 'attendance_rate']],
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No attendance records found for the selected date range.")
+        if logs:
+            # Convert to DataFrame
+            log_data = [{
+                "student_id": log.student_id,
+                "timestamp": log.timestamp,
+                "date": log.timestamp.date()
+            } for log in logs]
+            df_logs = pd.DataFrame(log_data)
+            
+            # Daily attendance trend
+            daily_counts = df_logs.groupby('date')['student_id'].nunique().reset_index()
+            daily_counts.columns = ['date', 'students_present']
+            
+            fig = px.line(
+                daily_counts,
+                x='date',
+                y='students_present',
+                title="Daily Attendance Trend",
+                markers=True
+            )
+            fig.update_layout(xaxis_title="Date", yaxis_title="Students Present")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Per-student attendance table
+            st.markdown("### Per-Student Attendance")
+            
+            # Get student names
+            students = session.query(Student).all()
+            student_map = {s.student_id: s.name for s in students}
+            total_students = len(students)
+            
+            # Calculate days in range (excluding weekends)
+            date_range = pd.date_range(start_date, end_date)
+            expected_days = len([d for d in date_range if d.weekday() < 5])
+            
+            # Count per student
+            student_attendance = df_logs.groupby('student_id').agg({
+                'date': 'nunique'
+            }).reset_index()
+            student_attendance.columns = ['student_id', 'days_present']
+            student_attendance['name'] = student_attendance['student_id'].map(student_map)
+            student_attendance['attendance_rate'] = (
+                student_attendance['days_present'] / max(expected_days, 1) * 100
+            ).round(1)
+            student_attendance = student_attendance.sort_values('attendance_rate', ascending=False)
+            
+            st.dataframe(
+                student_attendance[['student_id', 'name', 'days_present', 'attendance_rate']],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No attendance records found for the selected date range.")
+    finally:
+        session.close()
 
 
 def render_risk_analysis():
     """Render risk analysis overview."""
     st.subheader("🎯 Risk Analysis")
     
-    students = get_students_collection()
-    student_list = list(students.find())
-    
-    if not student_list:
-        st.warning("No students to analyze.")
-        return
+    session = get_db_session()
+    try:
+        students = session.query(Student).all()
+        
+        if not students:
+            st.warning("No students to analyze.")
+            return
+        
+        student_list = list(students)
+    finally:
+        session.close()
     
     # Run predictions for all students
     if st.button("🔄 Run Risk Analysis for All Students", type="primary"):
@@ -264,22 +299,27 @@ def render_risk_analysis():
             
             for i, student in enumerate(student_list):
                 # Calculate attendance (simplified)
-                attendance = get_attendance_logs_collection()
-                thirty_days_ago = datetime.now() - timedelta(days=30)
-                days_present = len(attendance.distinct("timestamp", {
-                    "student_id": student['student_id'],
-                    "timestamp": {"$gte": thirty_days_ago}
-                }))
-                attendance_pct = min(100, (days_present / 22) * 100)  # Assume 22 working days
+                session = get_db_session()
+                try:
+                    thirty_days_ago = datetime.now() - timedelta(days=30)
+                    days_present = session.query(
+                        func.count(func.distinct(func.date(AttendanceLog.timestamp)))
+                    ).filter(
+                        AttendanceLog.student_id == student.student_id,
+                        AttendanceLog.timestamp >= thirty_days_ago
+                    ).scalar() or 0
+                    attendance_pct = min(100, (days_present / 22) * 100)  # Assume 22 working days
+                finally:
+                    session.close()
                 
                 try:
                     risk_label, probs = predict_risk(
                         attendance=attendance_pct,
-                        avg_grade=float(student.get('avg_grade', 7)),
-                        infractions=int(student.get('infractions', 0)),
-                        gender=student.get('gender', 'M'),
-                        support=student.get('support', 'medium'),
-                        mode=student.get('mode', 'full_time')
+                        avg_grade=float(student.avg_grade or 7),
+                        infractions=int(student.infractions or 0),
+                        gender=student.gender or 'M',
+                        support=student.support or 'medium',
+                        mode=student.mode or 'full_time'
                     )
                 except Exception as e:
                     # Fallback for error
@@ -289,8 +329,8 @@ def render_risk_analysis():
                 label_text, _, emoji = get_risk_label_info(risk_label)
                 
                 results.append({
-                    'student_id': student['student_id'],
-                    'name': student['name'],
+                    'student_id': student.student_id,
+                    'name': student.name,
                     'risk_label': risk_label,
                     'risk_text': f"{emoji} {label_text}",
                     'low_prob': probs['Low'],
@@ -351,57 +391,73 @@ def render_data_export():
     
     st.markdown("Export data to CSV for external analysis.")
     
-    students = get_students_collection()
-    attendance = get_attendance_logs_collection()
-    
     col1, col2, col3 = st.columns(3)
     
-    with col1:
-        st.markdown("### Students Data")
-        student_list = list(students.find({}, {"_id": 0, "face_embedding": 0}))
-        if student_list:
-            df = pd.DataFrame(student_list)
-            csv = df.to_csv(index=False)
-            st.download_button(
-                "📥 Download Students CSV",
-                csv,
-                "students_export.csv",
-                "text/csv",
-                key="download_students"
-            )
-            st.caption(f"{len(student_list)} students")
-        else:
-            st.info("No students to export")
-    
-    with col2:
-        st.markdown("### Attendance Logs")
-        logs = list(attendance.find({}, {"_id": 0}))
-        if logs:
-            df = pd.DataFrame(logs)
-            csv = df.to_csv(index=False)
-            st.download_button(
-                "📥 Download Attendance CSV",
-                csv,
-                "attendance_export.csv",
-                "text/csv",
-                key="download_attendance"
-            )
-            st.caption(f"{len(logs)} records")
-        else:
-            st.info("No attendance to export")
-    
-    with col3:
-        st.markdown("### Risk Analysis")
-        if 'risk_results' in st.session_state:
-            df = pd.DataFrame(st.session_state['risk_results'])
-            csv = df.to_csv(index=False)
-            st.download_button(
-                "📥 Download Risk CSV",
-                csv,
-                "risk_analysis_export.csv",
-                "text/csv",
-                key="download_risk"
-            )
-            st.caption(f"{len(df)} assessments")
-        else:
-            st.info("Run risk analysis first")
+    session = get_db_session()
+    try:
+        with col1:
+            st.markdown("### Students Data")
+            students = session.query(Student).all()
+            if students:
+                student_list = [{
+                    "student_id": s.student_id,
+                    "name": s.name,
+                    "gender": s.gender,
+                    "mode": s.mode,
+                    "support": s.support,
+                    "avg_grade": s.avg_grade,
+                    "infractions": s.infractions,
+                    "program": s.program
+                } for s in students]
+                df = pd.DataFrame(student_list)
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Students CSV",
+                    csv,
+                    "students_export.csv",
+                    "text/csv",
+                    key="download_students"
+                )
+                st.caption(f"{len(student_list)} students")
+            else:
+                st.info("No students to export")
+        
+        with col2:
+            st.markdown("### Attendance Logs")
+            logs = session.query(AttendanceLog).all()
+            if logs:
+                log_list = [{
+                    "student_id": l.student_id,
+                    "timestamp": l.timestamp,
+                    "status": l.status
+                } for l in logs]
+                df = pd.DataFrame(log_list)
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Attendance CSV",
+                    csv,
+                    "attendance_export.csv",
+                    "text/csv",
+                    key="download_attendance"
+                )
+                st.caption(f"{len(log_list)} records")
+            else:
+                st.info("No attendance to export")
+        
+        with col3:
+            st.markdown("### Risk Analysis")
+            if 'risk_results' in st.session_state:
+                df = pd.DataFrame(st.session_state['risk_results'])
+                csv = df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Risk CSV",
+                    csv,
+                    "risk_analysis_export.csv",
+                    "text/csv",
+                    key="download_risk"
+                )
+                st.caption(f"{len(df)} assessments")
+            else:
+                st.info("Run risk analysis first")
+    finally:
+        session.close()

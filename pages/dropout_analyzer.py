@@ -5,8 +5,10 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
+from sqlalchemy import func
 
-from utils.db import get_students_collection, get_attendance_logs_collection, get_risk_scores_collection
+from utils.db import get_db_session
+from utils.models import Student, AttendanceLog, RiskScore
 from utils.model import predict_risk, get_risk_explanations, get_risk_label_info
 
 
@@ -15,9 +17,12 @@ def render_dropout_analyzer():
     st.title("📊 Dropout Risk Analyzer")
     st.markdown("Predict and analyze student dropout risk using machine learning.")
     
-    # Get students
-    students = get_students_collection()
-    student_list = list(students.find({}, {"student_id": 1, "name": 1}))
+    session = get_db_session()
+    try:
+        students = session.query(Student).all()
+        student_list = [{"student_id": s.student_id, "name": s.name} for s in students]
+    finally:
+        session.close()
     
     if not student_list:
         st.warning("⚠️ No students registered. Please add students first.")
@@ -41,74 +46,70 @@ def render_dropout_analyzer():
     
     if selected:
         student_id = options[selected]
-        student = students.find_one({"student_id": student_id})
-        
-        if student:
-            analyze_student(student, analysis_window)
+        session = get_db_session()
+        try:
+            student = session.query(Student).filter_by(student_id=student_id).first()
+            if student:
+                analyze_student(student, analysis_window)
+        finally:
+            session.close()
 
 
 def calculate_attendance_percentage(student_id: str, days: int = 30) -> float:
     """Calculate attendance percentage for a student over a time window."""
-    attendance = get_attendance_logs_collection()
+    session = get_db_session()
     
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
-    
-    # Count unique days with attendance
-    pipeline = [
-        {
-            "$match": {
-                "student_id": student_id,
-                "timestamp": {"$gte": start_date, "$lte": end_date},
-                "status": "present"
-            }
-        },
-        {
-            "$group": {
-                "_id": {
-                    "$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}
-                }
-            }
-        },
-        {"$count": "days_present"}
-    ]
-    
-    result = list(attendance.aggregate(pipeline))
-    days_present = result[0]["days_present"] if result else 0
-    
-    # Assume weekdays only (approximately 5/7 of days)
-    expected_days = int(days * 5 / 7)
-    if expected_days == 0:
-        return 100.0
-    
-    return min(100.0, (days_present / expected_days) * 100)
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Count unique days with attendance
+        logs = session.query(AttendanceLog).filter(
+            AttendanceLog.student_id == student_id,
+            AttendanceLog.timestamp >= start_date,
+            AttendanceLog.timestamp <= end_date,
+            AttendanceLog.status == "present"
+        ).all()
+        
+        # Get unique dates
+        unique_dates = set(log.timestamp.date() for log in logs)
+        days_present = len(unique_dates)
+        
+        # Assume weekdays only (approximately 5/7 of days)
+        expected_days = int(days * 5 / 7)
+        if expected_days == 0:
+            return 100.0
+        
+        return min(100.0, (days_present / expected_days) * 100)
+    finally:
+        session.close()
 
 
-def analyze_student(student: dict, analysis_window: int):
+def analyze_student(student: Student, analysis_window: int):
     """Perform and display risk analysis for a student."""
     st.markdown("---")
     
     # Display student info
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown(f"### {student['name']}")
-        st.caption(f"ID: {student['student_id']}")
+        st.markdown(f"### {student.name}")
+        st.caption(f"ID: {student.student_id}")
     with col2:
-        st.metric("Program", student.get("program", "N/A"))
+        st.metric("Program", student.program or "N/A")
     with col3:
-        st.metric("Study Mode", student.get("mode", "full_time").replace("_", " ").title())
+        st.metric("Study Mode", (student.mode or "full_time").replace("_", " ").title())
     
     st.markdown("---")
     
     # Calculate attendance
-    attendance_pct = calculate_attendance_percentage(student['student_id'], analysis_window)
+    attendance_pct = calculate_attendance_percentage(student.student_id, analysis_window)
     
     # Get student features
-    avg_grade = float(student.get("avg_grade", 7.0))
-    infractions = int(student.get("infractions", 0))
-    gender = student.get("gender", "M")
-    support = student.get("support", "medium")
-    mode = student.get("mode", "full_time")
+    avg_grade = float(student.avg_grade or 7.0)
+    infractions = int(student.infractions or 0)
+    gender = student.gender or "M"
+    support = student.support or "medium"
+    mode = student.mode or "full_time"
     
     # Display current features
     st.markdown("### 📋 Student Profile")
@@ -210,7 +211,7 @@ def analyze_student(student: dict, analysis_window: int):
     with col1:
         if st.button("💾 Save Prediction", type="primary"):
             save_prediction(
-                student['student_id'],
+                student.student_id,
                 risk_label,
                 probabilities
             )
@@ -218,38 +219,50 @@ def analyze_student(student: dict, analysis_window: int):
     
     # Show prediction history
     with st.expander("📜 Prediction History"):
-        show_prediction_history(student['student_id'])
+        show_prediction_history(student.student_id)
 
 
 def save_prediction(student_id: str, risk_label: int, probabilities: dict):
-    """Save a prediction to the risk_scores collection."""
-    risk_scores = get_risk_scores_collection()
-    risk_scores.insert_one({
-        "student_id": student_id,
-        "timestamp": datetime.now(),
-        "risk_label": risk_label,
-        "probabilities": probabilities
-    })
+    """Save a prediction to the risk_scores table."""
+    session = get_db_session()
+    try:
+        risk_score = RiskScore(
+            student_id=student_id,
+            timestamp=datetime.now(),
+            risk_label=risk_label
+        )
+        risk_score.set_probs(probabilities)
+        session.add(risk_score)
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        st.error(f"Error saving prediction: {e}")
+    finally:
+        session.close()
 
 
 def show_prediction_history(student_id: str):
     """Display prediction history for a student."""
-    risk_scores = get_risk_scores_collection()
-    history = list(risk_scores.find(
-        {"student_id": student_id}
-    ).sort("timestamp", -1).limit(10))
-    
-    if history:
-        history_data = []
-        for h in history:
-            label_text, _, emoji = get_risk_label_info(h['risk_label'])
-            history_data.append({
-                "Date": h['timestamp'].strftime("%Y-%m-%d %H:%M"),
-                "Risk Level": f"{emoji} {label_text}",
-                "Low %": f"{h['probabilities']['Low']*100:.1f}%",
-                "Medium %": f"{h['probabilities']['Medium']*100:.1f}%",
-                "High %": f"{h['probabilities']['High']*100:.1f}%"
-            })
-        st.dataframe(history_data, use_container_width=True)
-    else:
-        st.info("No prediction history available.")
+    session = get_db_session()
+    try:
+        history = session.query(RiskScore).filter_by(
+            student_id=student_id
+        ).order_by(RiskScore.timestamp.desc()).limit(10).all()
+        
+        if history:
+            history_data = []
+            for h in history:
+                label_text, _, emoji = get_risk_label_info(h.risk_label)
+                probs = h.get_probs()
+                history_data.append({
+                    "Date": h.timestamp.strftime("%Y-%m-%d %H:%M"),
+                    "Risk Level": f"{emoji} {label_text}",
+                    "Low %": f"{probs['Low']*100:.1f}%",
+                    "Medium %": f"{probs['Medium']*100:.1f}%",
+                    "High %": f"{probs['High']*100:.1f}%"
+                })
+            st.dataframe(history_data, use_container_width=True)
+        else:
+            st.info("No prediction history available.")
+    finally:
+        session.close()

@@ -5,6 +5,9 @@ venv/
 env/
 .env
 
+# Database
+dropout.db
+
 # Streamlit
 .streamlit/secrets.toml
 

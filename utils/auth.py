@@ -1,70 +1,58 @@
-"""
-Authentication utilities for user login and password hashing.
-"""
+import streamlit as st
 import bcrypt
-from typing import Optional, Dict, Any
-from utils.db import get_users_collection
+from utils.db import get_db_session
+from utils.models import User
+
+def hash_password(password):
+    """Hash a password for storing."""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 
-def hash_password(password: str) -> str:
-    """Hash a password using bcrypt."""
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
-    return hashed.decode('utf-8')
+def verify_password(password, hashed_password):
+    """Verify a stored password against one provided by user."""
+    return bcrypt.checkpw(password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 
-def verify_password(password: str, password_hash: str) -> bool:
-    """Verify a password against its hash."""
+def authenticate_user(username, password):
+    """Authenticate a user and return user info if successful."""
+    session = get_db_session()
     try:
-        return bcrypt.checkpw(
-            password.encode('utf-8'),
-            password_hash.encode('utf-8')
+        user = session.query(User).filter_by(username=username).first()
+        
+        if user and verify_password(password, user.password_hash):
+            return {
+                "username": user.username,
+                "role": user.role
+            }
+        return None
+    except Exception as e:
+        print(f"Auth error: {e}")
+        return None
+    finally:
+        session.close()
+
+
+def create_user(username, password, role="staff"):
+    """Create a new user."""
+    session = get_db_session()
+    try:
+        # Check if user exists
+        if session.query(User).filter_by(username=username).first():
+            return False
+            
+        hashed = hash_password(password)
+        new_user = User(
+            username=username,
+            password_hash=hashed,
+            role=role
         )
-    except Exception:
+        
+        session.add(new_user)
+        session.commit()
+        return True
+    except Exception as e:
+        print(f"Create user error: {e}")
+        session.rollback()
         return False
-
-
-def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
-    """
-    Authenticate a user by username and password.
-    
-    Returns:
-        User document if authentication succeeds, None otherwise.
-    """
-    users = get_users_collection()
-    user = users.find_one({"username": username})
-    
-    if user and verify_password(password, user["password_hash"]):
-        return {
-            "username": user["username"],
-            "role": user["role"]
-        }
-    return None
-
-
-def create_user(username: str, password: str, role: str = "staff") -> bool:
-    """
-    Create a new user.
-    
-    Returns:
-        True if user created successfully, False if username exists.
-    """
-    users = get_users_collection()
-    
-    # Check if user already exists
-    if users.find_one({"username": username}):
-        return False
-    
-    # Create new user
-    users.insert_one({
-        "username": username,
-        "password_hash": hash_password(password),
-        "role": role
-    })
-    return True
-
-
-def get_all_users() -> list:
-    """Get all users (excluding password hashes)."""
-    users = get_users_collection()
-    return list(users.find({}, {"password_hash": 0}))
+    finally:
+        session.close()

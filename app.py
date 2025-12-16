@@ -14,7 +14,8 @@ st.set_page_config(
 
 # Import utilities and pages
 from utils.auth import authenticate_user, create_user
-from utils.db import ensure_indexes, get_users_collection
+from utils.db import init_db, get_db_session
+from utils.models import User
 from pages.face_attendance import render_face_attendance
 from pages.student_registration import render_student_registration
 from pages.dropout_analyzer import render_dropout_analyzer
@@ -22,13 +23,16 @@ from pages.admin_dashboard import render_admin_dashboard
 
 
 def init_app():
-    """Initialize app with database indexes and default admin."""
-    ensure_indexes()
+    """Initialize app with database tables and default admin."""
+    init_db()
     
     # Create default admin if not exists
-    users = get_users_collection()
-    if not users.find_one({"username": "Admin"}):
-        create_user("Admin", "Admin@123", "admin")
+    session = get_db_session()
+    try:
+        if not session.query(User).filter_by(username="Admin").first():
+            create_user("Admin", "Admin@123", "admin")
+    finally:
+        session.close()
 
 
 
@@ -246,8 +250,8 @@ def main():
         init_app()
         load_global_css()
     except Exception as e:
-        st.error(f"⚠️ Database connection error: {e}")
-        st.info("Make sure MongoDB is running on localhost:27017")
+        st.error(f"⚠️ Database initialization error: {e}")
+        st.info("Please run 'python setup_db.py' first to initialize the database.")
         st.stop()
     
     # Check login status

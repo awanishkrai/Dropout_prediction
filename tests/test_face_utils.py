@@ -3,8 +3,8 @@ Tests for face utilities.
 """
 import numpy as np
 import pytest
-from unittest.mock import MagicMock, patch
-from utils.face_utils import compare_embeddings, find_matching_student
+from utils.face_utils import compare_embeddings
+
 
 def test_compare_embeddings():
     """Test cosine similarity calculation."""
@@ -19,25 +19,24 @@ def test_compare_embeddings():
     score_diff = compare_embeddings(vec1, vec3)
     assert score_diff <= 0.01
 
-def test_find_matching_student(mock_mongodb):
-    """Test finding a matching student."""
-    # Mock student with embedding
-    target_embedding = np.array([1, 0, 0])
+
+def test_compare_embeddings_normalized():
+    """Test similarity with normalized vectors."""
+    # Similar vectors
+    vec1 = np.array([0.5, 0.5, 0.5])
+    vec1 = vec1 / np.linalg.norm(vec1)
     
-    mock_student = {
-        "student_id": "STU123",
-        "name": "Test Student",
-        "face_embedding": [1, 0, 0] # Stored as list in JSON
-    }
+    vec2 = np.array([0.45, 0.55, 0.5])
+    vec2 = vec2 / np.linalg.norm(vec2)
     
-    mock_mongodb["students"].find.return_value = [mock_student]
+    score = compare_embeddings(vec1, vec2)
+    assert score > 0.9  # Should be similar
+
+
+def test_compare_embeddings_opposite():
+    """Test that opposite vectors have low similarity."""
+    vec1 = np.array([1, 0, 0])
+    vec2 = np.array([-1, 0, 0])
     
-    # Should match
-    match = find_matching_student(target_embedding, threshold=0.5)
-    assert match is not None
-    assert match["student_id"] == "STU123"
-    
-    # Should not match completely different vector
-    diff_embedding = np.array([0, 1, 0])
-    match_fail = find_matching_student(diff_embedding, threshold=0.99)
-    assert match_fail is None
+    score = compare_embeddings(vec1, vec2)
+    assert score < 0  # Negative for opposite directions

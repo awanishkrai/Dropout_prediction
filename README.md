@@ -6,8 +6,8 @@ An intelligent platform to monitor student attendance and predict dropout risk u
 
 Before you begin, ensure you have the following installed:
 1.  **Python 3.8+**: [Download Python](https://www.python.org/downloads/)
-2.  **MongoDB Community Server**: [Download MongoDB](https://www.mongodb.com/try/download/community)
-    *   Ensure MongoDB is running locally on port `27017`.
+
+> **Note**: This application uses SQLite, which requires no additional installation or setup.
 
 ## 🚀 Installation Guide
 
@@ -35,11 +35,14 @@ pip install -r requirements.txt
 ```
 
 ### 4. Initialize the Database
-Run the setup script to create the database, indexes, and default admin user:
+Run the setup script to create the SQLite database and default admin user:
 
 ```bash
 python setup_db.py
 ```
+
+This creates a file called `dropout.db` in the project root.
+
 *   **Default Admin Credentials**:
     *   Username: `Admin`
     *   Password: `Admin@123`
@@ -59,18 +62,43 @@ The app will open in your browser at `http://localhost:8501`.
 To verify that everything is working correctly:
 
 ```bash
-python run_tests.py
+python -m pytest tests/ -v
 ```
 
 ## 📂 Project Structure
 
-*   `app.py`: Main application entry point.
-*   `pages/`: Contains individual pages (Face Attendance, Dashboard, etc.).
-*   `utils/`: Utility functions for DB, Auth, Model, and Face Recognition.
-*   `dropout_model.pkl`: The trained machine learning model.
-*   `tests/`: Unit tests for the application.
+```
+AI_Project/
+├── app.py                  # Main application entry point
+├── setup_db.py             # Database initialization script
+├── dropout.db              # SQLite database (created after setup)
+├── dropout_model.pkl       # Trained ML model
+├── requirements.txt        # Python dependencies
+├── pages/                  # Streamlit pages
+│   ├── admin_dashboard.py  # Admin dashboard & analytics
+│   ├── dropout_analyzer.py # Risk prediction analysis
+│   ├── face_attendance.py  # Face recognition attendance
+│   └── student_registration.py # Student management
+├── utils/                  # Utility modules
+│   ├── auth.py             # Authentication functions
+│   ├── db.py               # Database connection (SQLite/SQLAlchemy)
+│   ├── face_utils.py       # Face detection & recognition
+│   ├── model.py            # ML model utilities
+│   └── models.py           # SQLAlchemy ORM models
+└── tests/                  # Unit tests
+    ├── conftest.py         # Test fixtures
+    ├── test_auth.py        # Auth tests
+    ├── test_db.py          # Database tests
+    ├── test_face_utils.py  # Face utils tests
+    └── test_model.py       # Model tests
+```
 
 ## ⚠️ Troubleshooting
 
-*   **MongoDB Error**: If you see a database connection error, ensure MongoDB Service is running in Task Manager (Windows) or via `sudo systemctl start mongod` (Linux).
-*   **Face Recognition**: Ensure your camera permissions are allowed if using webcam features, though the current version primarily supports file uploads.
+*   **Database Error**: If you see a database error, run `python setup_db.py` to reinitialize the database.
+*   **Face Recognition**: Ensure your camera permissions are allowed if using webcam features. The application also supports file uploads for face recognition.
+*   **Missing Dependencies**: If you encounter import errors, ensure all dependencies are installed with `pip install -r requirements.txt`.
+
+## 📝 License
+
+This project is for educational purposes.

@@ -6,7 +6,8 @@ import numpy as np
 from typing import Optional, List, Tuple, Dict, Any
 from pathlib import Path
 import base64
-from utils.db import get_students_collection
+from utils.db import get_db_session
+from utils.models import Student
 
 
 def detect_faces(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
@@ -98,19 +99,33 @@ def find_matching_student(
         threshold: Minimum similarity threshold
     
     Returns:
-        Student document if match found, None otherwise
+        Student dict (id, name) if match found, None otherwise
     """
-    students = get_students_collection()
+    session = get_db_session()
     best_match = None
     best_score = threshold
     
-    for student in students.find({"face_embedding": {"$exists": True}}):
-        stored_embedding = np.array(student["face_embedding"])
-        score = compare_embeddings(face_embedding, stored_embedding)
+    try:
+        students = session.query(Student).all()
         
-        if score > best_score:
-            best_score = score
-            best_match = student
+        for student in students:
+            stored_emb_list = student.get_embedding()
+            if stored_emb_list is None:
+                continue
+                
+            stored_embedding = np.array(stored_emb_list)
+            score = compare_embeddings(face_embedding, stored_embedding)
+            
+            if score > best_score:
+                best_score = score
+                best_match = {
+                    "student_id": student.student_id,
+                    "name": student.name
+                }
+    except Exception as e:
+        print(f"Error matching student: {e}")
+    finally:
+        session.close()
     
     return best_match
 
@@ -126,12 +141,19 @@ def store_face_embedding(student_id: str, embedding: np.ndarray) -> bool:
     Returns:
         True if successful
     """
-    students = get_students_collection()
-    result = students.update_one(
-        {"student_id": student_id},
-        {"$set": {"face_embedding": embedding.tolist()}}
-    )
-    return result.modified_count > 0
+    session = get_db_session()
+    try:
+        student = session.query(Student).filter_by(student_id=student_id).first()
+        if student:
+            student.set_embedding(embedding.tolist())
+            session.commit()
+            return True
+        return False
+    except Exception:
+        session.rollback()
+        return False
+    finally:
+        session.close()
 
 
 def draw_face_boxes(
